@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:init": "node scripts/init-db.js",
+    "email:sync": "node scripts/sync-emails.js",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^12.4.1",
