@@ -1,5 +1,3 @@
-import { simpleParser } from "mailparser";
-import { createIMAPConnection } from "./imap";
 import { Transaction } from "@/lib/db/schema";
 
 export interface ParsedEmail {
@@ -8,86 +6,6 @@ export interface ParsedEmail {
   from: string;
   text?: string;
   html?: string;
-}
-
-export async function fetchUnreadEmails(): Promise<ParsedEmail[]> {
-  return new Promise((resolve, reject) => {
-    const imap = createIMAPConnection();
-    const emails: ParsedEmail[] = [];
-    let processedCount = 0;
-    let totalMessages = 0;
-
-    imap.openBox("INBOX", false, (err, box) => {
-      if (err) {
-        imap.end();
-        reject(err);
-        return;
-      }
-
-      // Search for unread emails from last 24 hours
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-
-      imap.search(["UNSEEN", ["SINCE", yesterday]], (err, results) => {
-        if (err) {
-          imap.end();
-          reject(err);
-          return;
-        }
-
-        if (results.length === 0) {
-          imap.end();
-          resolve([]);
-          return;
-        }
-
-        totalMessages = results.length;
-        const f = imap.fetch(results, { bodies: "" });
-
-        f.on("message", (msg) => {
-          simpleParser(msg, async (err, parsed) => {
-            if (err) {
-              console.error("Error parsing email:", err);
-              processedCount++;
-            } else {
-              emails.push({
-                date: parsed.date || new Date(),
-                subject: parsed.subject || "",
-                from: parsed.from?.text || "",
-                text: parsed.text || "",
-                html: parsed.html || "",
-              });
-              processedCount++;
-            }
-
-            // Mark as read
-            msg.once("attributes", (attrs) => {
-              imap.addFlags(attrs.uid, ["\\Seen"], () => {});
-            });
-
-            if (processedCount === totalMessages) {
-              imap.end();
-              resolve(emails);
-            }
-          });
-        });
-
-        f.once("error", (err) => {
-          imap.end();
-          reject(err);
-        });
-      });
-    });
-
-    imap.once("error", reject);
-    imap.once("end", () => {
-      if (processedCount === 0 && totalMessages === 0) {
-        resolve(emails);
-      }
-    });
-
-    imap.connect();
-  });
 }
 
 export function parseTransaction(email: ParsedEmail): Transaction | null {
@@ -154,7 +72,7 @@ function normalizeMerchantName(name: string): string {
 function categorizeFromMerchant(merchant: string): string {
   const merchantLower = merchant.toLowerCase();
 
-  const categoryMap: Record<string, string> = {
+  const categoryMap: Record<string, string[]> = {
     "food & dining": [
       "swiggy",
       "zomato",
@@ -222,3 +140,4 @@ function categorizeFromMerchant(merchant: string): string {
 
   return "Uncategorized";
 }
+

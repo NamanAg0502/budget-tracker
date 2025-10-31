@@ -1,77 +1,78 @@
-// app/api/webhook/transaction/route.ts
 import { getDB } from "@/lib/db/db";
+import {
+  parseTransaction,
+  type ParsedEmail,
+} from "@/lib/email/transaction-parser";
 
 export async function POST(req: Request) {
   try {
     const { from, subject, body, date } = await req.json();
 
-    // Parse transaction from email body
-    const transaction = parseEmailTransaction({
-      from,
-      subject,
-      body,
-      date,
-    });
+    // Convert received email data to ParsedEmail format
+    const emailDate = date ? new Date(date) : new Date();
+    const parsedEmail: ParsedEmail = {
+      date: emailDate,
+      subject: subject || "",
+      from: from || "",
+      text: body || "",
+    };
+
+    // Parse transaction from email body using robust parser
+    const transaction = parseTransaction(parsedEmail);
     const db = getDB();
 
     if (!transaction) {
+      console.log("Could not parse transaction from email:", { from, subject });
       return Response.json(
         { error: "Could not parse transaction" },
         { status: 400 }
       );
     }
 
-    // Insert into database
-    db.prepare(
+    // Check for duplicate transactions (same date, amount, and merchant)
+    const existing = db
+      .prepare(
+        `
+        SELECT id FROM transactions 
+        WHERE date = ? AND amount = ? AND merchant = ? AND source = 'email'
+        LIMIT 1
       `
-      INSERT INTO transactions (id, date, amount, merchant, description, source)
-      VALUES (?, ?, ?, ?, ?, ?)
+      )
+      .get(transaction.date, transaction.amount, transaction.merchant);
+
+    if (existing) {
+      console.log("Duplicate transaction detected, skipping:", transaction);
+      return Response.json(
+        { success: true, message: "Duplicate transaction", transaction },
+        { status: 200 }
+      );
+    }
+
+    // Insert into database with all fields including category
+    const insertStmt = db.prepare(
+      `
+      INSERT INTO transactions (id, date, amount, merchant, category, description, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `
-    ).run(
+    );
+
+    insertStmt.run(
       `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       transaction.date,
       transaction.amount,
       transaction.merchant,
-      transaction.description,
+      transaction.category,
+      transaction.description || subject,
       "email"
     );
 
+    console.log("Transaction inserted successfully:", transaction);
     return Response.json({ success: true, transaction });
   } catch (error) {
     console.error("Webhook error:", error);
-    return Response.json({ error: String(error) }, { status: 500 });
+    return Response.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
   }
-}
-
-function parseEmailTransaction(
-  email: any
-): { amount: number; merchant: string; description: string } | null {
-  const { subject, body } = email;
-
-  // HDFC: "Your account has been debited with Rs. 5,000 at XYZ Store"
-  const hdfc = body.match(/Rs\.\s*([\d,]+(?:\.\d{2})?)/i);
-  if (hdfc) {
-    const merchant =
-      body.match(/at\s+([^\s]+(?:\s+[^\s]+)*?)\s+on/i)?.[1] || "Unknown";
-    return {
-      amount: parseFloat(hdfc[1].replace(/,/g, "")),
-      merchant: merchant.trim(),
-      description: subject,
-    };
-  }
-
-  // ICICI: "You have made a transaction of Rs. 3,000 at ABC Store"
-  const icici = body.match(/Rs\.\s*([\d,]+(?:\.\d{2})?)/i);
-  if (icici) {
-    const merchant =
-      body.match(/at\s+([^\s]+(?:\s+[^\s]+)*?)\s+(?:on|with)/i)?.[1] ||
-      "Unknown";
-    return {
-      amount: parseFloat(icici[1].replace(/,/g, "")),
-      merchant: merchant.trim(),
-      description: subject,
-    };
-  }
-
-  return null;
 }
